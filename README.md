@@ -43,6 +43,18 @@ From a checkout, `./install.sh --local` builds and installs the working tree (ne
 Characters are typed through your desktop's keyboard layout, so symbols come out right
 on non-US layouts too. Characters your layout can't type are skipped.
 
+## Tray icon and settings
+
+A controller icon in the system tray shows the driver status and the connected players.
+Clicking it opens a small settings popup:
+- See which players are connected.
+- Remap any chatpad key on each layer: click a key, or press it on the chatpad, then type
+  a character or pick a special key. Changes apply immediately.
+- Choose the keyboard layout: automatic, or a fixed one.
+
+The popup is also in your app menu as **X360 Chatpad Settings**. That's the way in on GNOME
+unless you install the "AppIndicator and KStatusNotifierItem Support" extension.
+
 ## Configuration
 
 `~/.config/x360chatpad/config.toml` (optional):
@@ -53,9 +65,16 @@ on non-US layouts too. Characters your layout can't type are skipped.
 # if your desktop layout differs.
 layout = "no"
 variant = ""
+
+# Remapped keys per layer (normal, green, orange). Use a single character, an evdev key
+# name such as "KEY_F5", or "" to disable the key. Key names: D1-D0, Q-P, A-L, Comma,
+# Z-M, Period, Enter, Left, Space, Right, Backspace.
+[keys.green]
+E = "KEY_F5"
 ```
 
-Restart after changing it: `systemctl --user restart x360chatpad`.
+The settings popup edits this file for you. After editing it by hand, choose "Reload" in
+the tray menu, or run `systemctl --user restart x360chatpad`.
 
 ## Troubleshooting
 
@@ -67,6 +86,7 @@ Restart after changing it: `systemctl --user restart x360chatpad`.
 ## Development
 
 - `cargo test --workspace` runs packet-parsing, keymap and layout tests.
+- Crates: `proto` (USB packets), `common` (config, keymap, D-Bus names), `daemon`, `tray`.
 - `x360chatpad-dump` (built with the daemon) hex-dumps receiver traffic and sends packets
   typed on stdin. It's useful for protocol work; stop the service first.
-- Protocol notes: [docs/protocol.md](docs/protocol.md)
+- Protocol notes: [docs/protocol.md](docs/protocol.md). Status and plans: [docs/ROADMAP.md](docs/ROADMAP.md)

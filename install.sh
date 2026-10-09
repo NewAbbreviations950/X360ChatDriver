@@ -15,6 +15,9 @@ ASSET="x360chatpad-x86_64-linux.tar.gz"
 BIN_DIR="$HOME/.local/bin"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT="x360chatpad.service"
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
 RULE_DEST="/etc/udev/rules.d/70-x360chatpad.rules"
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -45,6 +48,15 @@ install_files() {
     local src="$1"   # directory containing bin/ and share/
     say "Installing binaries to $BIN_DIR"
     install -Dm755 "$src/bin/x360chatpad-daemon" "$BIN_DIR/x360chatpad-daemon"
+    install -Dm755 "$src/bin/x360chatpad-tray" "$BIN_DIR/x360chatpad-tray"
+
+    say "Adding \"X360 Chatpad Settings\" to the app menu and the tray icon to autostart"
+    install_desktop "$src/share/x360chatpad-settings.desktop" "$APPS_DIR/x360chatpad-settings.desktop"
+    install_desktop "$src/share/x360chatpad-tray.desktop" "$AUTOSTART_DIR/x360chatpad-tray.desktop"
+    for icon in "$src"/share/icons/*.svg; do
+        install -Dm644 "$icon" "$ICON_DIR/$(basename "$icon")"
+    done
+    touch "${ICON_DIR%/scalable/apps}" 2>/dev/null || true   # nudge icon caches
 
     say "Installing systemd user service"
     install -Dm644 "$src/share/$UNIT" "$UNIT_DIR/$UNIT"
@@ -61,8 +73,33 @@ install_files() {
     systemctl --user enable "$UNIT" >/dev/null
     # restart (not start) so updates take effect immediately.
     systemctl --user restart "$UNIT"
+    start_tray
     say "Done. x360chatpad is running and will start automatically when you log in."
     say "Logs: journalctl --user -u $UNIT -f"
+}
+
+# Install a .desktop file with the binary directory filled in (launchers don't see ~/.local/bin
+# on every desktop).
+install_desktop() {
+    mkdir -p "$(dirname "$2")"
+    sed "s|@BIN_DIR@|$BIN_DIR|g" "$1" > "$2"
+    chmod 644 "$2"
+}
+
+has_tray_host() {
+    command -v busctl >/dev/null && busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1
+}
+
+# (Re)start the tray icon now if we're in a graphical session, so updates show immediately.
+start_tray() {
+    pkill -x x360chatpad-tra 2>/dev/null || true
+    [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] || return 0
+    if has_tray_host; then
+        setsid "$BIN_DIR/x360chatpad-tray" >/dev/null 2>&1 < /dev/null &
+    elif [[ "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]]; then
+        say "GNOME has no tray by default. Open \"X360 Chatpad Settings\" from the app menu, or install"
+        say "the \"AppIndicator and KStatusNotifierItem Support\" extension for a tray icon."
+    fi
 }
 
 stage_local() {
@@ -73,11 +110,11 @@ stage_local() {
     [ -x "$HOME/.cargo/bin/cargo" ] && PATH="$HOME/.cargo/bin:$PATH"
     command -v cargo >/dev/null || die "cargo not found; install Rust from https://rustup.rs"
     say "Building release binaries"
-    (cd "$root" && cargo build --release --locked -p x360chatpad-daemon)
+    (cd "$root" && cargo build --release --locked -p x360chatpad-daemon -p x360chatpad-tray)
     STAGE="$(mktemp -d)"
     mkdir -p "$STAGE/bin" "$STAGE/share"
-    cp "$root/target/release/x360chatpad-daemon" "$STAGE/bin/"
-    cp "$root/packaging/$UNIT" "$root/packaging/70-x360chatpad.rules" "$STAGE/share/"
+    cp "$root/target/release/x360chatpad-daemon" "$root/target/release/x360chatpad-tray" "$STAGE/bin/"
+    cp -r "$root"/packaging/* "$STAGE/share/"
 }
 
 stage_release() {
@@ -95,7 +132,10 @@ stage_release() {
 uninstall() {
     say "Stopping and removing x360chatpad"
     systemctl --user disable --now "$UNIT" 2>/dev/null || true
-    rm -f "$UNIT_DIR/$UNIT" "$BIN_DIR/x360chatpad-daemon"
+    pkill -x x360chatpad-tra 2>/dev/null || true
+    rm -f "$UNIT_DIR/$UNIT" "$BIN_DIR/x360chatpad-daemon" "$BIN_DIR/x360chatpad-tray" \
+        "$APPS_DIR/x360chatpad-settings.desktop" "$AUTOSTART_DIR/x360chatpad-tray.desktop" \
+        "$ICON_DIR/x360chatpad.svg" "$ICON_DIR/x360chatpad-tray-symbolic.svg"
     systemctl --user daemon-reload
     if [ -f "$RULE_DEST" ]; then
         as_root rm -f "$RULE_DEST"

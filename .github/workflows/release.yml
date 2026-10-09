@@ -14,13 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal
-      - run: cargo build --release --locked -p x360chatpad-daemon
+      - run: cargo build --release --locked -p x360chatpad-daemon -p x360chatpad-tray
       - name: Package
         run: |
           dir=x360chatpad-x86_64-linux
           mkdir -p "$dir/bin" "$dir/share"
-          cp target/release/x360chatpad-daemon "$dir/bin/"
-          cp packaging/x360chatpad.service packaging/70-x360chatpad.rules "$dir/share/"
+          cp target/release/x360chatpad-daemon target/release/x360chatpad-tray "$dir/bin/"
+          cp -r packaging/* "$dir/share/"
           tar -czf "$dir.tar.gz" "$dir"
           sha256sum "$dir.tar.gz" > SHA256SUMS
       - name: Publish
