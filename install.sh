@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install, update or remove x360chatpad for the current user.
 #
-#   curl -fsSL https://raw.githubusercontent.com/OWNER/X360ChatDriver/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NewAbbreviations950/X360ChatDriver/main/install.sh | bash
 #   ... | bash -s -- --uninstall
 #   ./install.sh --local        # from a checkout: build and install the working tree
 #
@@ -9,7 +9,7 @@
 # your user access the Xbox 360 wireless receiver.
 set -euo pipefail
 
-REPO="${X360CHATPAD_REPO:-OWNER/X360ChatDriver}"
+REPO="${X360CHATPAD_REPO:-NewAbbreviations950/X360ChatDriver}"
 ASSET="x360chatpad-x86_64-linux.tar.gz"
 
 BIN_DIR="$HOME/.local/bin"

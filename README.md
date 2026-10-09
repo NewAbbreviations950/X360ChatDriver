@@ -14,7 +14,7 @@ takes the receiver over from `xpad` (and gives it back when stopped). It exposes
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/OWNER/X360ChatDriver/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NewAbbreviations950/X360ChatDriver/main/install.sh | bash
 ```
 
 This installs to `~/.local/bin` and runs as a systemd user service that starts when you log
@@ -25,7 +25,7 @@ rule that gives your user access to the receiver. On Steam Deck, set a password 
 To update, run the same command again. To remove:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/OWNER/X360ChatDriver/main/install.sh | bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/NewAbbreviations950/X360ChatDriver/main/install.sh | bash -s -- --uninstall
 ```
 
 From a checkout, `./install.sh --local` builds and installs the working tree (needs Rust).
