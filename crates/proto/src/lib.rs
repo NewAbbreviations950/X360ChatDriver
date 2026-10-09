@@ -5,7 +5,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InPacket {
     /// Controller connected to / disconnected from this slot.
-    Presence { connected: bool },
+    Presence {
+        connected: bool,
+    },
     Gamepad(GamepadState),
     Chatpad(ChatpadEvent),
     /// Anything we don't understand (yet).
@@ -70,7 +72,9 @@ pub mod modifier {
 
 pub fn parse(data: &[u8]) -> InPacket {
     match data {
-        [0x08, flags, ..] => InPacket::Presence { connected: flags & 0x80 != 0 },
+        [0x08, flags, ..] => InPacket::Presence {
+            connected: flags & 0x80 != 0,
+        },
         [0x00, 0x01, 0x00, 0xf0, ..] if data.len() >= 18 => {
             let i16_at = |i: usize| i16::from_le_bytes([data[i], data[i + 1]]);
             InPacket::Gamepad(GamepadState {
@@ -184,7 +188,9 @@ mod tests {
     use super::*;
 
     fn hex(s: &str) -> Vec<u8> {
-        s.split_whitespace().map(|b| u8::from_str_radix(b, 16).unwrap()).collect()
+        s.split_whitespace()
+            .map(|b| u8::from_str_radix(b, 16).unwrap())
+            .collect()
     }
 
     // Packets below are copied from docs/captures/chatpad-keys.log.
@@ -192,12 +198,17 @@ mod tests {
     #[test]
     fn presence() {
         assert_eq!(parse(&hex("08 80")), InPacket::Presence { connected: true });
-        assert_eq!(parse(&hex("08 00")), InPacket::Presence { connected: false });
+        assert_eq!(
+            parse(&hex("08 00")),
+            InPacket::Presence { connected: false }
+        );
     }
 
     #[test]
     fn gamepad_idle_with_stick_drift() {
-        let p = parse(&hex("00 01 00 f0 00 13 00 00 00 00 41 fa 72 ea 5a 07 3b 1a 00 00 00 00 00 00 00 00 00 00 00"));
+        let p = parse(&hex(
+            "00 01 00 f0 00 13 00 00 00 00 41 fa 72 ea 5a 07 3b 1a 00 00 00 00 00 00 00 00 00 00 00",
+        ));
         assert_eq!(
             p,
             InPacket::Gamepad(GamepadState {
@@ -214,23 +225,37 @@ mod tests {
 
     #[test]
     fn chatpad_status() {
-        let wake = hex("00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 03 00 0d 0d");
-        let active = hex("00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 04 00 0e 0e");
+        let wake = hex(
+            "00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 03 00 0d 0d",
+        );
+        let active = hex(
+            "00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 04 00 0e 0e",
+        );
         assert_eq!(parse(&wake), InPacket::Chatpad(ChatpadEvent::WakeRequest));
         assert_eq!(parse(&active), InPacket::Chatpad(ChatpadEvent::Active));
     }
 
     #[test]
     fn chatpad_keys() {
-        let shift_a = hex("00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 37 00 00");
+        let shift_a = hex(
+            "00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 37 00 00",
+        );
         assert_eq!(
             parse(&shift_a),
-            InPacket::Chatpad(ChatpadEvent::Keys(ChatpadKeys { modifiers: modifier::SHIFT, keys: [0x37, 0] }))
+            InPacket::Chatpad(ChatpadEvent::Keys(ChatpadKeys {
+                modifiers: modifier::SHIFT,
+                keys: [0x37, 0]
+            }))
         );
-        let q_w = hex("00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 26 27 00");
+        let q_w = hex(
+            "00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 26 27 00",
+        );
         assert_eq!(
             parse(&q_w),
-            InPacket::Chatpad(ChatpadEvent::Keys(ChatpadKeys { modifiers: 0, keys: [0x26, 0x27] }))
+            InPacket::Chatpad(ChatpadEvent::Keys(ChatpadKeys {
+                modifiers: 0,
+                keys: [0x26, 0x27]
+            }))
         );
     }
 

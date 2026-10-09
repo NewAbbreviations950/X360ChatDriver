@@ -9,4 +9,7 @@ ctrlc = { version = "3.5.2", features = ["termination"] }
 evdev = "0.13.2"
 libc = "0.2.190"
 nusb = "0.2.7"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
 x360chatpad-proto = { version = "0.1.0", path = "../proto" }
+xkbcommon-dl = "0.4.2"

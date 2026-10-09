@@ -8,15 +8,15 @@
 //!   q                    quit
 
 use std::io::BufRead;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
-use nusb::transfer::{Buffer, In, Interrupt, Out};
+use anyhow::{Context, Result, bail};
 use nusb::MaybeFuture;
+use nusb::transfer::{Buffer, In, Interrupt, Out};
 
 const RECEIVER_IDS: &[(u16, u16)] = &[(0x045e, 0x0719), (0x045e, 0x0291), (0x045e, 0x02a9)];
 const SLOTS: u8 = 4;
@@ -31,8 +31,17 @@ fn main() -> Result<()> {
         .wait()?
         .find(|d| RECEIVER_IDS.contains(&(d.vendor_id(), d.product_id())))
         .context("no Xbox 360 wireless receiver found")?;
-    println!("found receiver {:04x}:{:04x} on bus {} addr {}", info.vendor_id(), info.product_id(), info.busnum(), info.device_address());
-    let device = info.open().wait().context("open receiver (need the udev rule or root)")?;
+    println!(
+        "found receiver {:04x}:{:04x} on bus {} addr {}",
+        info.vendor_id(),
+        info.product_id(),
+        info.busnum(),
+        info.device_address()
+    );
+    let device = info
+        .open()
+        .wait()
+        .context("open receiver (need the udev rule or root)")?;
 
     let running = Arc::new(AtomicBool::new(true));
     {
@@ -86,7 +95,11 @@ fn run(device: &nusb::Device, running: &Arc<AtomicBool>) -> Result<()> {
                     }
                 }
                 if keepalive && last_keepalive.elapsed() >= Duration::from_secs(1) {
-                    send(&mut ep_out, slot, &chatpad_cmd(if toggle { 0x1f } else { 0x1e }));
+                    send(
+                        &mut ep_out,
+                        slot,
+                        &chatpad_cmd(if toggle { 0x1f } else { 0x1e }),
+                    );
                     toggle = !toggle;
                     last_keepalive = Instant::now();
                 }
@@ -97,7 +110,12 @@ fn run(device: &nusb::Device, running: &Arc<AtomicBool>) -> Result<()> {
                             let d = &c.buffer[..c.actual_len];
                             println!("{t:9.3} slot{slot} IN  {}", hex(d));
                             // Chatpad wake request: the host must answer with 0x1b each time.
-                            if keepalive && d.len() >= 26 && d[..4] == [0x00, 0x02, 0x00, 0xf0] && d[24] == 0xf0 && d[25] == 0x03 {
+                            if keepalive
+                                && d.len() >= 26
+                                && d[..4] == [0x00, 0x02, 0x00, 0xf0]
+                                && d[24] == 0xf0
+                                && d[25] == 0x03
+                            {
                                 send(&mut ep_out, slot, &chatpad_cmd(0x1b));
                             }
                         }
@@ -169,7 +187,12 @@ fn parse_cmd(line: &str) -> Result<Option<(usize, Cmd)>> {
     }
     let slot = parse_slot(Some(first))?;
     let bytes = words
-        .flat_map(|w| w.as_bytes().chunks(2).map(|c| std::str::from_utf8(c).unwrap().to_owned()).collect::<Vec<_>>())
+        .flat_map(|w| {
+            w.as_bytes()
+                .chunks(2)
+                .map(|c| std::str::from_utf8(c).unwrap().to_owned())
+                .collect::<Vec<_>>()
+        })
         .map(|b| u8::from_str_radix(&b, 16).with_context(|| format!("bad hex byte {b:?}")))
         .collect::<Result<Vec<u8>>>()?;
     if bytes.is_empty() {
@@ -179,7 +202,10 @@ fn parse_cmd(line: &str) -> Result<Option<(usize, Cmd)>> {
 }
 
 fn parse_slot(w: Option<&str>) -> Result<usize> {
-    let slot: usize = w.context("missing slot")?.parse().context("slot must be 0-3")?;
+    let slot: usize = w
+        .context("missing slot")?
+        .parse()
+        .context("slot must be 0-3")?;
     if slot >= SLOTS as usize {
         bail!("slot must be 0-3");
     }
@@ -187,5 +213,9 @@ fn parse_slot(w: Option<&str>) -> Result<usize> {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+    bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
