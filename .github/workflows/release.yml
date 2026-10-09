@@ -1,0 +1,29 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Oldest supported runner, so the binary's glibc requirement stays low enough for
+    # SteamOS and older distros.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo build --release --locked -p x360chatpad-daemon
+      - name: Package
+        run: |
+          dir=x360chatpad-x86_64-linux
+          mkdir -p "$dir/bin" "$dir/share"
+          cp target/release/x360chatpad-daemon "$dir/bin/"
+          cp packaging/x360chatpad.service packaging/70-x360chatpad.rules "$dir/share/"
+          tar -czf "$dir.tar.gz" "$dir"
+          sha256sum "$dir.tar.gz" > SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes x360chatpad-x86_64-linux.tar.gz SHA256SUMS
