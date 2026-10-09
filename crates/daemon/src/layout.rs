@@ -300,7 +300,7 @@ fn first(list: &str) -> String {
 }
 
 fn detect_kde() -> Option<LayoutName> {
-    let path = dirs_config()?.join("kxkbrc");
+    let path = x360chatpad_common::config::config_dir()?.join("kxkbrc");
     let text = std::fs::read_to_string(path).ok()?;
     let get = |key: &str| {
         text.lines()
@@ -344,13 +344,6 @@ fn detect_localed() -> Option<LayoutName> {
         layout,
         variant: get("X11 Variant:").unwrap_or_default(),
     })
-}
-
-pub fn dirs_config() -> Option<std::path::PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(Into::into)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
 }
 
 #[cfg(test)]

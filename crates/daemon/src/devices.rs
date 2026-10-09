@@ -240,6 +240,8 @@ pub struct ChatpadOutput {
     pub caps_toggled: bool,
     /// Open Steam's friends & chat window (People).
     pub open_chat: bool,
+    /// Chatpad keys newly pressed (for the settings app's "press a key" picker).
+    pub pressed: Vec<ChatpadKey>,
 }
 
 /// Gap between the steps of a button chord.
@@ -334,7 +336,10 @@ impl ChatpadState {
                 Layer::Normal
             };
             let combo = match ChatpadKey::from_code(code) {
-                Some(key) => keymap.combo(layer, key, active & modifier::SHIFT != 0),
+                Some(key) => {
+                    out.pressed.push(key);
+                    keymap.combo(layer, key, active & modifier::SHIFT != 0)
+                }
                 None => {
                     eprintln!("unknown chatpad key code {code:#04x}");
                     None

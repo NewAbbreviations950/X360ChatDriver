@@ -2,7 +2,7 @@
 //! controller as a virtual Xbox 360 pad, plus a shared virtual keyboard for chatpads.
 
 mod actions;
-mod config;
+mod dbus;
 mod devices;
 mod indicators;
 mod keyboard;
@@ -11,7 +11,7 @@ mod layout;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -31,13 +31,34 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
 
 struct Shared {
     running: AtomicBool,
-    keymap: Keymap,
+    keymap: RwLock<Keymap>,
+    /// Which controller slots have a controller connected.
+    connected: [AtomicBool; SLOTS as usize],
+    /// Session bus connection, if available, for status and key signals.
+    dbus: Option<zbus::blocking::Connection>,
     keyboard: Mutex<Keyboard>,
     /// System Caps Lock state, as mirrored onto our keyboard by the compositor.
     caps_lock: AtomicBool,
 }
 
 impl Shared {
+    fn set_connected(&self, slot: u8, connected: bool) {
+        self.connected[slot as usize].store(connected, Ordering::SeqCst);
+    }
+
+    fn key_pressed(&self, slot: u8, key: x360chatpad_proto::ChatpadKey) {
+        if let Some(conn) = &self.dbus {
+            dbus::emit_key(conn, slot, key);
+        }
+    }
+
+    /// Re-read the config and re-detect the layout. Returns config problems, if any.
+    fn reload(&self) -> Vec<String> {
+        let (keymap, problems) = load_keymap();
+        *self.keymap.write().unwrap() = keymap;
+        problems
+    }
+
     fn type_keys(&self, events: &[(evdev::KeyCode, bool)]) -> std::io::Result<()> {
         if events.is_empty() {
             return Ok(());
@@ -47,15 +68,17 @@ impl Shared {
 }
 
 fn main() -> Result<()> {
-    let config = config::Config::load();
-    let layout = Layout::load(config.layout_name());
-    eprintln!("typing for keyboard layout {}", layout.name);
-    let keymap = Keymap::new(layout);
+    let (keymap, problems) = load_keymap();
+    for p in problems {
+        eprintln!("config: {p}");
+    }
     let (keyboard, mut leds) =
         Keyboard::new().context("create virtual keyboard (is /dev/uinput accessible?)")?;
-    let shared = Arc::new(Shared {
+    let shared = Arc::new_cyclic(|weak| Shared {
         running: AtomicBool::new(true),
-        keymap,
+        keymap: RwLock::new(keymap),
+        connected: Default::default(),
+        dbus: dbus::serve(weak.clone()),
         keyboard: Mutex::new(keyboard),
         caps_lock: AtomicBool::new(false),
     });
@@ -98,6 +121,24 @@ fn main() -> Result<()> {
     }
     eprintln!("stopped");
     Ok(())
+}
+
+/// Build the keymap from config.toml and the detected (or configured) keyboard layout.
+/// Returns it along with any config problems, which are reported but not fatal.
+fn load_keymap() -> (Keymap, Vec<String>) {
+    let mut problems = Vec::new();
+    let config = x360chatpad_common::config::Config::load().unwrap_or_else(|e| {
+        problems.push(format!("{e}; using defaults"));
+        Default::default()
+    });
+    let configured = config
+        .layout_name()
+        .map(|(layout, variant)| layout::LayoutName { layout, variant });
+    let layout = Layout::load(configured);
+    eprintln!("typing for keyboard layout {}", layout.name);
+    let (table, errors) = x360chatpad_common::keymap::KeyTable::with_overrides(&config.keys);
+    problems.extend(errors);
+    (Keymap::with_table(layout, table), problems)
 }
 
 fn find_receiver() -> Result<Option<DeviceInfo>> {
@@ -183,11 +224,14 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                             send(&mut ep_out, &out::led(2 + slot))?;
                             indicators.reset();
                             next_keepalive = Instant::now();
+                            shared.set_connected(slot, true);
                         }
                         InPacket::Presence { connected: false } if pad.is_some() => {
                             eprintln!("slot {slot}: controller disconnected");
                             pad = None;
-                            shared.type_keys(&chatpad.release_all(&shared.keymap).keys)?;
+                            shared.set_connected(slot, false);
+                            let out = chatpad.release_all(&shared.keymap.read().unwrap());
+                            shared.type_keys(&out.keys)?;
                         }
                         InPacket::Gamepad(state) => {
                             if let Some(pad) = pad.as_mut() {
@@ -201,8 +245,11 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                             indicators.on_status(leds)
                         }
                         InPacket::Chatpad(ChatpadEvent::Keys(keys)) => {
-                            let out = chatpad.update(keys, &shared.keymap);
+                            let out = chatpad.update(keys, &shared.keymap.read().unwrap());
                             shared.type_keys(&out.keys)?;
+                            for key in &out.pressed {
+                                shared.key_pressed(slot, *key);
+                            }
                             if out.open_chat {
                                 actions::open_steam_chat();
                             }
@@ -248,8 +295,9 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
         Ok(())
     })();
 
-    let _ = shared.type_keys(&chatpad.release_all(&shared.keymap).keys);
+    let _ = shared.type_keys(&chatpad.release_all(&shared.keymap.read().unwrap()).keys);
     if pad.is_some() {
+        shared.set_connected(slot, false);
         let _ = send(&mut ep_out, &out::rumble(0, 0));
     }
     ep_in.cancel_all();
