@@ -197,33 +197,6 @@ impl Pad {
     }
 }
 
-/// The virtual keyboard all chatpads type into.
-pub struct Keyboard {
-    dev: VirtualDevice,
-}
-
-impl Keyboard {
-    pub fn new() -> io::Result<Self> {
-        // Declare every regular key: which ones we press depends on the user's layout.
-        let keys: AttributeSet<KeyCode> = (1..=KeyCode::KEY_MICMUTE.0).map(KeyCode).collect();
-        let dev = VirtualDevice::builder()?
-            .name("X360 Chatpad")
-            .input_id(InputId::new(BusType::BUS_VIRTUAL, 0x045e, 0x0719, 1))
-            .with_keys(&keys)?
-            .build()?;
-        Ok(Keyboard { dev })
-    }
-
-    pub fn send(&mut self, events: &[(KeyCode, bool)]) -> io::Result<()> {
-        // One SYN per key event, so compositors see presses in order and never merged.
-        for &(key, down) in events {
-            self.dev
-                .emit(&[InputEvent::new(EventType::KEY.0, key.0, down as i32)])?;
-        }
-        Ok(())
-    }
-}
-
 /// Shift, Green and Orange are one-shot like on the console: tap one, then the key. Holding
 /// the modifier while pressing the key works too.
 const STICKY: [u8; 3] = [modifier::SHIFT, modifier::GREEN, modifier::ORANGE];
@@ -235,6 +208,8 @@ pub struct ChatpadOutput {
     pub keys: Vec<(KeyCode, bool)>,
     /// Press (`true`) or release the Steam Quick Access shortcut (Guide+A) on this controller's pad.
     pub quick_menu: Option<bool>,
+    /// Caps Lock was toggled (Shift + Orange).
+    pub caps_toggled: bool,
 }
 
 /// Steam opens its Quick Access menu on Guide+A.
@@ -254,8 +229,6 @@ pub struct ChatpadState {
     used: u8,
     /// Whether the held People key is acting as the Quick Access shortcut rather than Meta.
     people_quick_menu: bool,
-    /// Caps Lock as toggled from this chatpad, for its indicator light.
-    caps_lock: bool,
     /// Raw codes currently held, with the chord held for each (released in reverse).
     held: Vec<(u8, Vec<KeyCode>)>,
 }
@@ -300,7 +273,7 @@ impl ChatpadState {
                     (KeyCode::KEY_CAPSLOCK, true),
                     (KeyCode::KEY_CAPSLOCK, false),
                 ]);
-                self.caps_lock = !self.caps_lock;
+                out.caps_toggled = true;
                 self.latched &= !(bit | caps_partner);
                 self.used |= caps_partner & report.modifiers;
                 continue;
@@ -359,12 +332,12 @@ impl ChatpadState {
         out
     }
 
-    /// Indicator lights (`led::*` bits) this state should show: Caps for Caps Lock or a
-    /// latched Shift, Green/Orange while latched or held.
-    pub fn indicators(&self) -> u8 {
+    /// Indicator lights (`led::*` bits) this state should show: Caps for the system's Caps
+    /// Lock or a latched Shift, Green/Orange while latched or held.
+    pub fn indicators(&self, caps_lock: bool) -> u8 {
         let active = self.modifiers | self.latched;
         let mut leds = 0;
-        if self.caps_lock || self.latched & modifier::SHIFT != 0 {
+        if caps_lock || self.latched & modifier::SHIFT != 0 {
             leds |= led::CAPS;
         }
         if active & modifier::GREEN != 0 {
@@ -513,16 +486,16 @@ mod tests {
         assert_eq!(
             down,
             ChatpadOutput {
-                keys: vec![],
-                quick_menu: Some(true)
+                quick_menu: Some(true),
+                ..Default::default()
             }
         );
         let up = s.update(report(modifier::GREEN, &[]), &map);
         assert_eq!(
             up,
             ChatpadOutput {
-                keys: vec![],
-                quick_menu: Some(false)
+                quick_menu: Some(false),
+                ..Default::default()
             }
         );
         // Green was used, so releasing it doesn't latch.
@@ -562,16 +535,20 @@ mod tests {
         let map = Keymap::new(Layout::us());
         let mut s = ChatpadState::default();
         s.update(report(modifier::GREEN, &[]), &map);
-        assert_eq!(s.indicators(), led::GREEN); // held
+        assert_eq!(s.indicators(false), led::GREEN); // held
         s.update(report(0, &[]), &map);
-        assert_eq!(s.indicators(), led::GREEN); // latched
+        assert_eq!(s.indicators(false), led::GREEN); // latched
         s.update(report(0, &[Q]), &map);
-        assert_eq!(s.indicators(), 0); // consumed
+        assert_eq!(s.indicators(false), 0); // consumed
+        assert_eq!(s.indicators(true), led::CAPS); // system Caps Lock
         s.update(report(0, &[]), &map);
         s.update(report(modifier::SHIFT, &[]), &map);
         s.update(report(modifier::SHIFT | modifier::ORANGE, &[]), &map);
+        assert!(s.update(report(modifier::SHIFT, &[]), &map).caps_toggled);
+        s.update(report(0, &[]), &map);
+        // Latched Shift lights Caps until used.
         s.update(report(modifier::SHIFT, &[]), &map);
         s.update(report(0, &[]), &map);
-        assert_eq!(s.indicators(), led::CAPS);
+        assert_eq!(s.indicators(false), led::CAPS);
     }
 }

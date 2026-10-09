@@ -4,6 +4,7 @@
 mod config;
 mod devices;
 mod indicators;
+mod keyboard;
 mod keymap;
 mod layout;
 
@@ -18,7 +19,8 @@ use nusb::transfer::{Buffer, In, Interrupt, Out, TransferError};
 use nusb::{DeviceInfo, Endpoint, MaybeFuture};
 use x360chatpad_proto::{ChatpadEvent, InPacket, out, parse};
 
-use devices::{ChatpadState, Keyboard, Pad};
+use devices::{ChatpadState, Pad};
+use keyboard::Keyboard;
 use keymap::Keymap;
 use layout::Layout;
 
@@ -30,6 +32,8 @@ struct Shared {
     running: AtomicBool,
     keymap: Keymap,
     keyboard: Mutex<Keyboard>,
+    /// System Caps Lock state, as mirrored onto our keyboard by the compositor.
+    caps_lock: AtomicBool,
 }
 
 impl Shared {
@@ -46,13 +50,22 @@ fn main() -> Result<()> {
     let layout = Layout::load(config.layout_name());
     eprintln!("typing for keyboard layout {}", layout.name);
     let keymap = Keymap::new(layout);
-    let keyboard =
+    let (keyboard, mut leds) =
         Keyboard::new().context("create virtual keyboard (is /dev/uinput accessible?)")?;
     let shared = Arc::new(Shared {
         running: AtomicBool::new(true),
         keymap,
         keyboard: Mutex::new(keyboard),
+        caps_lock: AtomicBool::new(false),
     });
+    {
+        let shared = shared.clone();
+        thread::spawn(move || {
+            while let Ok(on) = leds.next_caps_lock() {
+                shared.caps_lock.store(on, Ordering::SeqCst);
+            }
+        });
+    }
     {
         let shared = shared.clone();
         ctrlc::set_handler(move || shared.running.store(false, Ordering::SeqCst))?;
@@ -189,6 +202,10 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                         InPacket::Chatpad(ChatpadEvent::Keys(keys)) => {
                             let out = chatpad.update(keys, &shared.keymap);
                             shared.type_keys(&out.keys)?;
+                            if out.caps_toggled {
+                                // Show it right away; the compositor's LED update confirms it.
+                                shared.caps_lock.fetch_xor(true, Ordering::SeqCst);
+                            }
                             if let (Some(on), Some(pad)) = (out.quick_menu, pad.as_mut()) {
                                 pad.set_overlay(if on { devices::QUICK_MENU_BUTTONS } else { 0 })?;
                             }
@@ -210,7 +227,10 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                 if let Some((strong, weak)) = pad.poll_ff()? {
                     send(&mut ep_out, &out::rumble(strong, weak))?;
                 }
-                for (bit, on) in indicators.poll(chatpad.indicators(), Instant::now()) {
+                for (bit, on) in indicators.poll(
+                    chatpad.indicators(shared.caps_lock.load(Ordering::SeqCst)),
+                    Instant::now(),
+                ) {
                     send(&mut ep_out, &out::chatpad_led(bit, on))?;
                 }
                 if Instant::now() >= next_keepalive {
