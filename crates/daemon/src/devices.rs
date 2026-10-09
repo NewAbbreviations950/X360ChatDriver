@@ -11,7 +11,7 @@ use evdev::{
     AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, EventSummary, EventType, FFEffectCode,
     FFEffectKind, InputEvent, InputId, KeyCode, UInputCode, UinputAbsSetup,
 };
-use x360chatpad_proto::{ChatpadKey, ChatpadKeys, GamepadState, button, modifier};
+use x360chatpad_proto::{ChatpadKey, ChatpadKeys, GamepadState, button, led, modifier};
 
 use crate::keymap::{Keymap, Layer};
 
@@ -254,6 +254,8 @@ pub struct ChatpadState {
     used: u8,
     /// Whether the held People key is acting as the Quick Access shortcut rather than Meta.
     people_quick_menu: bool,
+    /// Caps Lock as toggled from this chatpad, for its indicator light.
+    caps_lock: bool,
     /// Raw codes currently held, with the chord held for each (released in reverse).
     held: Vec<(u8, Vec<KeyCode>)>,
 }
@@ -298,6 +300,7 @@ impl ChatpadState {
                     (KeyCode::KEY_CAPSLOCK, true),
                     (KeyCode::KEY_CAPSLOCK, false),
                 ]);
+                self.caps_lock = !self.caps_lock;
                 self.latched &= !(bit | caps_partner);
                 self.used |= caps_partner & report.modifiers;
                 continue;
@@ -354,6 +357,23 @@ impl ChatpadState {
             self.used |= report.modifiers;
         }
         out
+    }
+
+    /// Indicator lights (`led::*` bits) this state should show: Caps for Caps Lock or a
+    /// latched Shift, Green/Orange while latched or held.
+    pub fn indicators(&self) -> u8 {
+        let active = self.modifiers | self.latched;
+        let mut leds = 0;
+        if self.caps_lock || self.latched & modifier::SHIFT != 0 {
+            leds |= led::CAPS;
+        }
+        if active & modifier::GREEN != 0 {
+            leds |= led::GREEN;
+        }
+        if active & modifier::ORANGE != 0 {
+            leds |= led::ORANGE;
+        }
+        leds
     }
 
     /// Release everything (controller disconnected or daemon stopping).
@@ -535,5 +555,23 @@ mod tests {
             s.update(report(0, &[]), &map).keys,
             vec![(K::KEY_LEFTMETA, false)]
         );
+    }
+
+    #[test]
+    fn indicators_follow_latches_and_caps() {
+        let map = Keymap::new(Layout::us());
+        let mut s = ChatpadState::default();
+        s.update(report(modifier::GREEN, &[]), &map);
+        assert_eq!(s.indicators(), led::GREEN); // held
+        s.update(report(0, &[]), &map);
+        assert_eq!(s.indicators(), led::GREEN); // latched
+        s.update(report(0, &[Q]), &map);
+        assert_eq!(s.indicators(), 0); // consumed
+        s.update(report(0, &[]), &map);
+        s.update(report(modifier::SHIFT, &[]), &map);
+        s.update(report(modifier::SHIFT | modifier::ORANGE, &[]), &map);
+        s.update(report(modifier::SHIFT, &[]), &map);
+        s.update(report(0, &[]), &map);
+        assert_eq!(s.indicators(), led::CAPS);
     }
 }

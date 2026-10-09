@@ -50,8 +50,11 @@ pub mod button {
 pub enum ChatpadEvent {
     /// The chatpad wants to wake up; the host must answer with [`out::chatpad_wake_ack`].
     WakeRequest,
-    /// Chatpad is awake and reporting keys.
-    Active,
+    /// Chatpad handshake done. `leds` is the indicator state (`led::*` bits); it reads 0
+    /// while the chatpad is idle (backlight off), even though the chatpad remembers its LEDs.
+    Active {
+        leds: u8,
+    },
     Keys(ChatpadKeys),
 }
 
@@ -61,6 +64,18 @@ pub struct ChatpadKeys {
     /// Bitmask of `modifier::*`.
     pub modifiers: u8,
     pub keys: [u8; 2],
+}
+
+/// Chatpad indicator bits, as reported in [`ChatpadEvent::Active`].
+pub mod led {
+    pub const PEOPLE: u8 = 0x01;
+    pub const GREEN: u8 = 0x08;
+    pub const ORANGE: u8 = 0x10;
+    pub const CAPS: u8 = 0x20;
+    /// Set while the chatpad is awake (backlight on).
+    pub const BACKLIGHT: u8 = 0x80;
+    /// The indicators the host can switch.
+    pub const ALL: [u8; 4] = [CAPS, GREEN, ORANGE, PEOPLE];
 }
 
 pub mod modifier {
@@ -89,7 +104,7 @@ pub fn parse(data: &[u8]) -> InPacket {
         }
         [0x00, 0x02, 0x00, 0xf0, ..] if data.len() >= 28 => match (data[24], data[25]) {
             (0xf0, 0x03) => InPacket::Chatpad(ChatpadEvent::WakeRequest),
-            (0xf0, 0x04) => InPacket::Chatpad(ChatpadEvent::Active),
+            (0xf0, 0x04) => InPacket::Chatpad(ChatpadEvent::Active { leds: data[26] }),
             (0x00, modifiers) => InPacket::Chatpad(ChatpadEvent::Keys(ChatpadKeys {
                 modifiers,
                 keys: [data[26], data[27]],
@@ -129,6 +144,18 @@ pub mod out {
     /// Reply to every [`super::ChatpadEvent::WakeRequest`].
     pub const fn chatpad_wake_ack() -> Packet {
         packet(0x00, 0x00, 0x0c, 0x1b)
+    }
+
+    /// Switch one chatpad indicator (a `led::*` bit other than BACKLIGHT). While the chatpad
+    /// is idle this only wakes it, so it must be re-sent once it reports itself awake.
+    pub const fn chatpad_led(led: u8, on: bool) -> Packet {
+        let index = match led {
+            super::led::CAPS => 0,
+            super::led::GREEN => 1,
+            super::led::ORANGE => 2,
+            _ => 3,
+        };
+        packet(0x00, 0x00, 0x0c, index | if on { 0x08 } else { 0x00 })
     }
 
     /// Keepalive, sent about once a second; `phase` alternates the two variants.
@@ -232,7 +259,29 @@ mod tests {
             "00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 04 00 0e 0e",
         );
         assert_eq!(parse(&wake), InPacket::Chatpad(ChatpadEvent::WakeRequest));
-        assert_eq!(parse(&active), InPacket::Chatpad(ChatpadEvent::Active));
+        assert_eq!(
+            parse(&active),
+            InPacket::Chatpad(ChatpadEvent::Active { leds: 0 })
+        );
+        // From docs/captures/chatpad-leds.log after `0c 08`: caps + backlight.
+        let caps = hex(
+            "00 02 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 04 a0 09 09",
+        );
+        assert_eq!(
+            parse(&caps),
+            InPacket::Chatpad(ChatpadEvent::Active {
+                leds: led::CAPS | led::BACKLIGHT
+            })
+        );
+    }
+
+    #[test]
+    fn led_commands() {
+        assert_eq!(out::chatpad_led(led::CAPS, true)[3], 0x08);
+        assert_eq!(out::chatpad_led(led::GREEN, true)[3], 0x09);
+        assert_eq!(out::chatpad_led(led::ORANGE, true)[3], 0x0a);
+        assert_eq!(out::chatpad_led(led::PEOPLE, true)[3], 0x0b);
+        assert_eq!(out::chatpad_led(led::GREEN, false)[3], 0x01);
     }
 
     #[test]

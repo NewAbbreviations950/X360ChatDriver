@@ -18,6 +18,8 @@ Items marked *(xpad)* come from the kernel `xpad` driver and are not independent
 | `00 01 0f c0 00 SS WW 00…` | rumble, SS = strong (left) motor, WW = weak (right) motor *(xpad)* |
 | `00 00 0c 1b 00…` | chatpad: answer to a wake request (`f0 03`) — **send once per wake packet** |
 | `00 00 0c 1e` / `00 00 0c 1f` | chatpad keepalive, alternated about once per second |
+| `00 00 0c 08`–`0b` | chatpad indicator **on**: Caps, Green, Orange, People |
+| `00 00 0c 00`–`03` | chatpad indicator **off**: Caps, Green, Orange, People |
 
 ## Controller → host (IN)
 ### Presence (2 bytes)
@@ -39,7 +41,7 @@ Bytes from offset 4 match the wired 360 report *(xpad)*:
 | Bytes 24–25 | Meaning |
 |---|---|
 | `f0 03` | chatpad wake request → host must reply `0c 1b` (seen ~4× in a burst, answer each) |
-| `f0 04` | chatpad active (sent alongside keepalives); backlight is on in this state |
+| `f0 04` | chatpad active (sent alongside keepalives); byte 26 = indicator state, see below |
 | `00 MM` | key report: `MM` = modifier bits, byte 26 = key 1, byte 27 = key 2 (`00` = none) |
 
 Byte 27/28 of status packets is a 4-bit counter that advances with each keepalive.
@@ -56,7 +58,15 @@ Z 46   X 45  C 44  V 43  B 42  N 41  M 52  . 53  Enter 63✔
 Left 55  Space 54✔  Right 51  Backspace 71✔
 ```
 
+### Chatpad indicators
+Byte 26 of `f0 04` status packets: Caps `20`, Green `08`, Orange `10`, People `01`,
+backlight/awake `80` (capture: `captures/chatpad-leds.log`).
+- About 11 s after the last activity, the chatpad goes idle: backlight off, and byte 26 reads `00`.
+  It **remembers** the indicators; a keypress wakes it and they reappear.
+- An indicator command sent while idle only wakes the chatpad. The chatpad sends `f0 03`,
+  we answer `1b`, and the command itself is dropped. Re-send it once byte 26 has `80` set.
+
 ### Unknown
 - `00 f8 0N 00…` (N = 1–3): seen only while the chatpad was not handshaked and keys were being pressed. Possibly "key pressed while asleep" or an attachment status.
 - Battery level: not identified yet.
-- Chatpad LEDs (caps lock, green/orange/people indicators): not identified yet.
+- `00 f8 01` / `00 f8 02` alternate every few seconds in some sessions; meaning unknown.

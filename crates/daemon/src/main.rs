@@ -3,6 +3,7 @@
 
 mod config;
 mod devices;
+mod indicators;
 mod keymap;
 mod layout;
 
@@ -147,6 +148,7 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
 
     let mut pad: Option<Pad> = None;
     let mut chatpad = ChatpadState::default();
+    let mut indicators = indicators::IndicatorSync::default();
     let mut keepalive_phase = false;
     let mut next_keepalive = Instant::now();
 
@@ -165,6 +167,7 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                             eprintln!("slot {slot}: controller connected");
                             pad = Some(Pad::new().context("create virtual pad")?);
                             send(&mut ep_out, &out::led(2 + slot))?;
+                            indicators.reset();
                             next_keepalive = Instant::now();
                         }
                         InPacket::Presence { connected: false } if pad.is_some() => {
@@ -179,6 +182,9 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                         }
                         InPacket::Chatpad(ChatpadEvent::WakeRequest) => {
                             send(&mut ep_out, &out::chatpad_wake_ack())?
+                        }
+                        InPacket::Chatpad(ChatpadEvent::Active { leds }) => {
+                            indicators.on_status(leds)
                         }
                         InPacket::Chatpad(ChatpadEvent::Keys(keys)) => {
                             let out = chatpad.update(keys, &shared.keymap);
@@ -203,6 +209,9 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
             if let Some(pad) = pad.as_mut() {
                 if let Some((strong, weak)) = pad.poll_ff()? {
                     send(&mut ep_out, &out::rumble(strong, weak))?;
+                }
+                for (bit, on) in indicators.poll(chatpad.indicators(), Instant::now()) {
+                    send(&mut ep_out, &out::chatpad_led(bit, on))?;
                 }
                 if Instant::now() >= next_keepalive {
                     send(&mut ep_out, &out::chatpad_keepalive(keepalive_phase))?;

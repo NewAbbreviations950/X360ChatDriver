@@ -13,10 +13,10 @@ script, no Flatpak) is summarised under "Architecture decisions" at the end.
   (Guide+A), People = Meta.
 - `install.sh` (release download / `--local` / `--uninstall`), systemd user unit, udev
   rule, and CI + release workflows.
+- Chatpad indicator lights:
+  - Caps shows Caps Lock or a latched Shift; Green and Orange show latched or held.
+  - Re-synced from the status byte whenever the chatpad wakes (see `docs/protocol.md`).
 
-## In progress
-- **Chatpad indicator lights** (Shift/Caps, Green, Orange, People): find the wireless LED
-  commands, then drive them from the latched/caps state.
 
 ## Next
 - **Publish:** create the GitHub repo `NewAbbreviations950/X360ChatDriver`, push, and tag
@@ -35,6 +35,13 @@ script, no Flatpak) is summarised under "Architecture decisions" at the end.
   - Add it to `install.sh`, plus autostart `.desktop` files and an icon.
 
 ## Later
+- **Sync Caps Lock with the system:** the Caps light currently tracks only Caps Lock
+  toggled from the chatpad.
+  - Fix: give the virtual keyboard `EV_LED`/`LED_CAPSLOCK`, so the compositor sends LED
+    state back to it.
+  - The `evdev` crate's builder has no LED support, so this needs a raw `UI_SET_LEDBIT`
+    ioctl or a small patch.
+- **Use for the People light:** it's currently always off.
 - **Battery status:** not identified in the protocol yet. Capture with `x360chatpad-dump`
   while the battery drains, or compare different battery levels. Show it in the tray, and
   notify when low.
