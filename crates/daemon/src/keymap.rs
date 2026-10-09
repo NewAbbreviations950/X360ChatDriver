@@ -28,7 +28,6 @@ pub enum Output {
 pub struct Keymap {
     layers: HashMap<(Layer, ChatpadKey), Output>,
     layout: Layout,
-    pub people: KeyCode,
 }
 
 impl Keymap {
@@ -43,11 +42,7 @@ impl Keymap {
                 layers.insert((layer, key), out);
             }
         }
-        Keymap {
-            layers,
-            layout,
-            people: KeyCode::KEY_LEFTMETA,
-        }
+        Keymap { layers, layout }
     }
 
     pub fn output(&self, layer: Layer, key: ChatpadKey) -> Option<Output> {

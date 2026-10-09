@@ -1,6 +1,7 @@
 //! x360chatpad-daemon: takes an Xbox 360 Wireless Receiver over from xpad and exposes each
 //! controller as a virtual Xbox 360 pad, plus a shared virtual keyboard for chatpads.
 
+mod actions;
 mod config;
 mod devices;
 mod indicators;
@@ -202,12 +203,15 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                         InPacket::Chatpad(ChatpadEvent::Keys(keys)) => {
                             let out = chatpad.update(keys, &shared.keymap);
                             shared.type_keys(&out.keys)?;
+                            if out.open_chat {
+                                actions::open_steam_chat();
+                            }
                             if out.caps_toggled {
                                 // Show it right away; the compositor's LED update confirms it.
                                 shared.caps_lock.fetch_xor(true, Ordering::SeqCst);
                             }
                             if let (Some(on), Some(pad)) = (out.quick_menu, pad.as_mut()) {
-                                pad.set_overlay(if on { devices::QUICK_MENU_BUTTONS } else { 0 })?;
+                                pad.quick_menu(on, Instant::now())?;
                             }
                         }
                         _ => {}
@@ -224,6 +228,7 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
             }
 
             if let Some(pad) = pad.as_mut() {
+                pad.tick(Instant::now())?;
                 if let Some((strong, weak)) = pad.poll_ff()? {
                     send(&mut ep_out, &out::rumble(strong, weak))?;
                 }

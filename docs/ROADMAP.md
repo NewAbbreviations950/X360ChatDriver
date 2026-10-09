@@ -13,6 +13,9 @@ script, no Flatpak) is summarised under "Architecture decisions" at the end.
   (Guide+A), People = Meta.
 - `install.sh` (release download / `--local` / `--uninstall`), systemd user unit, udev
   rule, and CI + release workflows.
+- People opens Steam friends & chat (`steam://open/friends`).
+- Quick Access sends Guide, then A 80 ms later, so Steam doesn't also register a stray A.
+- Caps light synced with the system Caps Lock via an `LED_CAPSL` on the virtual keyboard.
 - Chatpad indicator lights:
   - Caps shows Caps Lock or a latched Shift; Green and Orange show latched or held.
   - Re-synced from the status byte whenever the chatpad wakes (see `docs/protocol.md`).
@@ -35,12 +38,9 @@ script, no Flatpak) is summarised under "Architecture decisions" at the end.
   - Add it to `install.sh`, plus autostart `.desktop` files and an icon.
 
 ## Later
-- **Sync Caps Lock with the system:** the Caps light currently tracks only Caps Lock
-  toggled from the chatpad.
-  - Fix: give the virtual keyboard `EV_LED`/`LED_CAPSLOCK`, so the compositor sends LED
-    state back to it.
-  - The `evdev` crate's builder has no LED support, so this needs a raw `UI_SET_LEDBIT`
-    ioctl or a small patch.
+- **Steam controller list at startup:** if the pad already exists when Steam starts, Steam
+  uses it but may not list it in Settings → Controller. It does list it once it's hotplugged
+  while Steam runs. Check this again, especially when booting into Deck game mode.
 - **Use for the People light:** it's currently always off.
 - **Battery status:** not identified in the protocol yet. Capture with `x360chatpad-dump`
   while the battery drains, or compare different battery levels. Show it in the tray, and

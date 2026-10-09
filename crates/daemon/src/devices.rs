@@ -45,6 +45,8 @@ pub struct Pad {
     /// Last state from the controller, and buttons we hold down on top of it (chatpad shortcuts).
     last: GamepadState,
     overlay: u16,
+    /// Overlay changes scheduled for later (for button sequences like Guide-then-A).
+    overlay_steps: std::collections::VecDeque<(Instant, u16)>,
 }
 
 impl Pad {
@@ -80,6 +82,7 @@ impl Pad {
             rumble: (0, 0),
             last: GamepadState::default(),
             overlay: 0,
+            overlay_steps: Default::default(),
         })
     }
 
@@ -119,11 +122,36 @@ impl Pad {
         self.dev.emit(&events)
     }
 
-    /// Hold `buttons` down in addition to whatever the controller reports.
-    pub fn set_overlay(&mut self, buttons: u16) -> io::Result<()> {
-        self.overlay = buttons;
-        let last = self.last;
-        self.emit(&last)
+    /// Press or release the Steam Quick Access shortcut. Like a person would, Guide goes
+    /// down first and A follows, so Steam sees a Guide chord rather than a stray A press.
+    pub fn quick_menu(&mut self, on: bool, now: Instant) -> io::Result<()> {
+        let (first, second) = if on {
+            (button::GUIDE, button::GUIDE | button::A)
+        } else {
+            (button::GUIDE, 0)
+        };
+        self.overlay_steps.clear();
+        self.overlay_steps.push_back((now, first));
+        self.overlay_steps.push_back((now + CHORD_STEP, second));
+        self.tick(now)
+    }
+
+    /// Apply scheduled overlay changes that are due.
+    pub fn tick(&mut self, now: Instant) -> io::Result<()> {
+        let mut changed = false;
+        while let Some(&(at, buttons)) = self.overlay_steps.front() {
+            if at > now {
+                break;
+            }
+            self.overlay_steps.pop_front();
+            changed |= self.overlay != buttons;
+            self.overlay = buttons;
+        }
+        if changed {
+            let last = self.last;
+            self.emit(&last)?;
+        }
+        Ok(())
     }
 
     /// Handle pending force-feedback requests from games. Returns the new rumble strength
@@ -210,16 +238,18 @@ pub struct ChatpadOutput {
     pub quick_menu: Option<bool>,
     /// Caps Lock was toggled (Shift + Orange).
     pub caps_toggled: bool,
+    /// Open Steam's friends & chat window (People).
+    pub open_chat: bool,
 }
 
-/// Steam opens its Quick Access menu on Guide+A.
-pub const QUICK_MENU_BUTTONS: u16 = button::GUIDE | button::A;
+/// Gap between the steps of a button chord.
+const CHORD_STEP: Duration = Duration::from_millis(80);
 
 /// Turns one chatpad's key reports into key events for the shared keyboard.
 ///
 /// Special combinations (either key may be held or tapped first):
 /// - Shift + Orange toggles Caps Lock.
-/// - Green + People opens the Steam Quick Access menu; People alone is the Meta key.
+/// - Green + People opens the Steam Quick Access menu; People alone opens Steam chat.
 #[derive(Default)]
 pub struct ChatpadState {
     modifiers: u8,
@@ -248,15 +278,11 @@ impl ChatpadState {
                 self.used |= green & report.modifiers;
                 out.quick_menu = Some(true);
             } else {
-                out.keys.push((keymap.people, true));
+                out.open_chat = true;
             }
         }
-        if released & modifier::PEOPLE != 0 {
-            if self.people_quick_menu {
-                out.quick_menu = Some(false);
-            } else {
-                out.keys.push((keymap.people, false));
-            }
+        if released & modifier::PEOPLE != 0 && self.people_quick_menu {
+            out.quick_menu = Some(false);
         }
 
         for bit in STICKY {
@@ -517,17 +543,13 @@ mod tests {
     }
 
     #[test]
-    fn people_alone_is_meta() {
+    fn people_alone_opens_chat() {
         let map = Keymap::new(Layout::us());
         let mut s = ChatpadState::default();
-        assert_eq!(
-            s.update(report(modifier::PEOPLE, &[]), &map).keys,
-            vec![(K::KEY_LEFTMETA, true)]
-        );
-        assert_eq!(
-            s.update(report(0, &[]), &map).keys,
-            vec![(K::KEY_LEFTMETA, false)]
-        );
+        let down = s.update(report(modifier::PEOPLE, &[]), &map);
+        assert!(down.open_chat && down.keys.is_empty() && down.quick_menu.is_none());
+        let up = s.update(report(0, &[]), &map);
+        assert_eq!(up, ChatpadOutput::default());
     }
 
     #[test]

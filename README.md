@@ -37,7 +37,7 @@ From a checkout, `./install.sh --local` builds and installs the working tree (ne
 | Shift, Green, Orange | one-shot: tap it, then press a key (holding it works too); tap again to cancel |
 | Green / Orange + key | the green / orange character printed on the key |
 | Shift + Orange | Caps Lock on/off |
-| People | Meta (Super) key |
+| People | open Steam friends & chat |
 | Green + People | Steam Quick Access menu (Guide + A) |
 
 Characters are typed through your desktop's keyboard layout, so symbols come out right
