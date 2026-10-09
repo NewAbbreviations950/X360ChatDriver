@@ -1,0 +1,12 @@
+[package]
+name = "x360chatpad-daemon"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+ctrlc = { version = "3.5.2", features = ["termination"] }
+evdev = "0.13.2"
+libc = "0.2.190"
+nusb = "0.2.7"
+x360chatpad-proto = { version = "0.1.0", path = "../proto" }
