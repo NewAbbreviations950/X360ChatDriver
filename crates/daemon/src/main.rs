@@ -333,6 +333,7 @@ fn restore_xpad(device: &nusb::Device, info: &DeviceInfo) {
     for slot in 0..SLOTS {
         let iface = slot * 2;
         let driver_link = sysfs.join(format!("{name}:1.{iface}/driver"));
+        let mut last_err = None;
         for attempt in 0..5 {
             if has_driver(&driver_link) {
                 break;
@@ -340,16 +341,28 @@ fn restore_xpad(device: &nusb::Device, info: &DeviceInfo) {
             if attempt > 0 {
                 thread::sleep(Duration::from_millis(200));
             }
-            let _ = device.attach_kernel_driver(iface);
+            if let Err(e) = device.attach_kernel_driver(iface) {
+                last_err = Some(e);
+            }
         }
         if !has_driver(&driver_link) && info_still_present(info) {
-            eprintln!("warning: could not give interface {iface} back to xpad");
+            match last_err {
+                Some(e) => eprintln!(
+                    "warning: could not give interface {iface} back to xpad after 5 attempts: {e}"
+                ),
+                None => eprintln!(
+                    "warning: could not give interface {iface} back to xpad after 5 attempts"
+                ),
+            }
         }
     }
 }
 
+/// True only when the interface is bound to xpad. Any driver would do for a plain existence
+/// check, but while we still hold the interface its link points at usbfs, which would make
+/// the handback think it had already succeeded.
 fn has_driver(link: &Path) -> bool {
-    link.exists()
+    std::fs::read_link(link).is_ok_and(|target| target.file_name() == Some("xpad".as_ref()))
 }
 
 fn sleep_while_running(shared: &Shared, total: Duration) {
