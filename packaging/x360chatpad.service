@@ -1,0 +1,10 @@
+[Unit]
+Description=Xbox 360 wireless controller + chatpad driver
+
+[Service]
+ExecStart=%h/.local/bin/x360chatpad-daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

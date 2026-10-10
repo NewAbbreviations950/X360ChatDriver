@@ -1,0 +1,16 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install xkb data and libxkbcommon (for layout tests)
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon0 xkb-data
+      - run: rustup toolchain install stable --profile minimal -c clippy,rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
