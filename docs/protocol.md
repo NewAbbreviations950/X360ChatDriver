@@ -60,7 +60,7 @@ Left 55  Space 54✔  Right 51  Backspace 71✔
 
 ### Chatpad indicators
 Byte 26 of `f0 04` status packets: Caps `20`, Green `08`, Orange `10`, People `01`,
-backlight/awake `80` (capture: `captures/chatpad-leds.log`).
+backlight/awake `80`.
 - About 11 s after the last activity, the chatpad goes idle: backlight off, and byte 26 reads `00`.
   It **remembers** the indicators; a keypress wakes it and they reappear.
 - An indicator command sent while idle only wakes the chatpad. The chatpad sends `f0 03`,
