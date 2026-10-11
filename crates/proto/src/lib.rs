@@ -10,8 +10,58 @@ pub enum InPacket {
     },
     Gamepad(GamepadState),
     Chatpad(ChatpadEvent),
+    /// The controller's battery level (from the link-info or status packet).
+    Battery(Battery),
     /// Anything we don't understand (yet).
     Other,
+}
+
+/// Controller battery level. The codes are from `docs/protocol.md` (Battery).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Battery {
+    Empty,
+    Low,
+    Medium,
+    Full,
+}
+
+impl Battery {
+    /// Map the 3-bit battery code (`byte >> 5`). Other codes are not known.
+    pub fn from_code(code: u8) -> Option<Battery> {
+        match code {
+            1 => Some(Battery::Empty),
+            3 => Some(Battery::Low),
+            5 => Some(Battery::Medium),
+            7 => Some(Battery::Full),
+            _ => None,
+        }
+    }
+
+    /// Bars to show, 1 (empty) to 4 (full).
+    pub fn bars(self) -> u8 {
+        match self {
+            Battery::Empty => 1,
+            Battery::Low => 2,
+            Battery::Medium => 3,
+            Battery::Full => 4,
+        }
+    }
+
+    /// Inverse of [`Battery::bars`]; 0 (or anything else) means unknown.
+    pub fn from_bars(bars: u8) -> Option<Battery> {
+        match bars {
+            1 => Some(Battery::Empty),
+            2 => Some(Battery::Low),
+            3 => Some(Battery::Medium),
+            4 => Some(Battery::Full),
+            _ => None,
+        }
+    }
+
+    /// The pad flashes its light at this level and below.
+    pub fn is_low(self) -> bool {
+        matches!(self, Battery::Empty | Battery::Low)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -111,7 +161,21 @@ pub fn parse(data: &[u8]) -> InPacket {
             })),
             _ => InPacket::Other,
         },
+        // Link info: byte 17 is the battery code; its low five bits are always `00011`.
+        [0x00, 0x0f, 0x00, 0xf0, ..] if data.len() >= 18 && data[17] & 0x1f == 0x03 => {
+            battery(data[17])
+        }
+        // Status: byte 4 is the battery code; its low five bits are always `00010`.
+        [0x00, 0x00, 0x00, 0x13 | 0x17, b, ..] if b & 0x1f == 0x02 => battery(*b),
         _ => InPacket::Other,
+    }
+}
+
+/// The battery packet for a byte whose top three bits are the code. Unknown codes are `Other`.
+fn battery(byte: u8) -> InPacket {
+    match Battery::from_code(byte >> 5) {
+        Some(level) => InPacket::Battery(level),
+        None => InPacket::Other,
     }
 }
 
@@ -331,5 +395,59 @@ mod tests {
             assert_eq!(ChatpadKey::from_name(k.name()), Some(k));
         }
         assert_eq!(ChatpadKey::from_code(0), None);
+    }
+
+    fn link(byte17: &str) -> Vec<u8> {
+        hex(&format!(
+            "00 0f 00 f0 00 00 00 00 00 00 00 00 00 00 00 00 13 {byte17} 20 1d"
+        ))
+    }
+
+    fn status(byte4: &str) -> Vec<u8> {
+        hex(&format!("00 00 00 13 {byte4} 00 00 00"))
+    }
+
+    // Battery bytes are from docs/captures/battery-sweep-2026-10-10.log.
+    #[test]
+    fn battery_codes() {
+        assert_eq!(parse(&link("e3")), InPacket::Battery(Battery::Full));
+        assert_eq!(parse(&link("a3")), InPacket::Battery(Battery::Medium));
+        assert_eq!(parse(&link("63")), InPacket::Battery(Battery::Low));
+        assert_eq!(parse(&link("23")), InPacket::Battery(Battery::Empty));
+
+        assert_eq!(parse(&status("e2")), InPacket::Battery(Battery::Full));
+        assert_eq!(parse(&status("a2")), InPacket::Battery(Battery::Medium));
+        assert_eq!(parse(&status("62")), InPacket::Battery(Battery::Low));
+        assert_eq!(parse(&status("22")), InPacket::Battery(Battery::Empty));
+        // The second status header, `00 00 00 17`, carries the same byte.
+        assert_eq!(
+            parse(&hex("00 00 00 17 62 00 00 00")),
+            InPacket::Battery(Battery::Low)
+        );
+    }
+
+    #[test]
+    fn battery_rejects_unknown_bytes() {
+        // Low five bits don't match the packet type (the unexplained `c0` and `3c` values).
+        assert_eq!(parse(&link("c0")), InPacket::Other);
+        assert_eq!(parse(&link("3c")), InPacket::Other);
+        assert_eq!(parse(&status("c0")), InPacket::Other);
+        assert_eq!(parse(&status("3c")), InPacket::Other);
+        // Right low bits, but code 0 isn't a known level.
+        assert_eq!(parse(&status("02")), InPacket::Other);
+        // Same first bytes as the status packet, but a different packet.
+        assert_eq!(parse(&hex("00 00 00 f0 00 00 00 00")), InPacket::Other);
+        // Too short to hold the byte.
+        assert_eq!(parse(&hex("00 00 00 13")), InPacket::Other);
+    }
+
+    #[test]
+    fn battery_bars_roundtrip() {
+        for level in [Battery::Empty, Battery::Low, Battery::Medium, Battery::Full] {
+            assert_eq!(Battery::from_bars(level.bars()), Some(level));
+        }
+        assert_eq!(Battery::from_bars(0), None);
+        assert!(Battery::Low.is_low() && Battery::Empty.is_low());
+        assert!(!Battery::Medium.is_low() && !Battery::Full.is_low());
     }
 }

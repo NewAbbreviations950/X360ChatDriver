@@ -44,6 +44,27 @@ impl Service {
             .collect();
         Ok((layout, connected))
     }
+
+    /// Battery bars (1 empty to 4 full) for each of the four slots; 0 when unknown or not connected.
+    fn battery(&self) -> zbus::fdo::Result<Vec<u8>> {
+        let shared = self
+            .shared
+            .upgrade()
+            .ok_or(zbus::fdo::Error::Failed("shutting down".into()))?;
+        let bars = shared
+            .connected
+            .iter()
+            .zip(&shared.battery)
+            .map(|(connected, bars)| {
+                if connected.load(Ordering::SeqCst) {
+                    bars.load(Ordering::SeqCst)
+                } else {
+                    0
+                }
+            })
+            .collect();
+        Ok(bars)
+    }
 }
 
 /// Start the service. Without a session bus (or if another daemon owns the name) we carry on

@@ -76,7 +76,7 @@ Two packets carry a battery code. The top three bits of the byte are the code (`
 
 Observed codes, from resets at each voltage (sweep 2, 3.0 V down to 2.1 V):
 
-| Code | Byte values | Voltage | Flashing | Provisional bar |
+| Code | Byte values | Voltage | Flashing | Bars (shown in the popup) |
 |---|---|---|---|---|
 | 7 | `e3` (link), `e2` (status) | 2.7–3.0 V | no | full |
 | 5 | `a3`, `a2` | 2.38–2.6 V | no | medium |

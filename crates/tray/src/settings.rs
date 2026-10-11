@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, Vec2};
-use x360chatpad_common::ChatpadKey;
 use x360chatpad_common::config::Config;
 use x360chatpad_common::keymap::{KeyTable, Layer, Output};
+use x360chatpad_common::{Battery, ChatpadKey};
 
 use crate::client::{self, Client, Status};
 use crate::placement::{self, Anchor};
@@ -234,6 +234,19 @@ impl Settings {
                 }
             };
             pill(ui, &p, dot, &text);
+            if let Some(s) = &status.running {
+                let several = s.connected.iter().filter(|c| **c).count() > 1;
+                for (slot, (connected, level)) in s.connected.iter().zip(&s.battery).enumerate() {
+                    if let (true, Some(level)) = (*connected, level) {
+                        ui.add_space(8.0);
+                        if several {
+                            ui.label(egui::RichText::new(format!("P{}", slot + 1)).weak());
+                        }
+                        let tip = format!("Player {}: battery {}", slot + 1, level_name(*level));
+                        battery_bars(ui, &p, *level, &tip);
+                    }
+                }
+            }
             if status.running.is_none() && ui.button("Start driver").clicked() {
                 crate::tray::restart_driver();
             }
@@ -619,6 +632,33 @@ fn pill(ui: &mut egui::Ui, p: &Palette, dot: Color32, text: &str) {
         galley,
         p.text,
     );
+}
+
+/// Four battery segments, filled up to the level. Green when healthy, warn colour when low.
+fn battery_bars(ui: &mut egui::Ui, p: &Palette, level: Battery, tip: &str) {
+    const SEGMENT: Vec2 = Vec2::new(5.0, 12.0);
+    const GAP: f32 = 2.0;
+    let size = Vec2::new(4.0 * SEGMENT.x + 3.0 * GAP, SEGMENT.y);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    response.on_hover_text(tip);
+    let fill = if level.is_low() { p.warn } else { p.green };
+    let empty = mix(p.button, p.weak_text, 0.5);
+    for i in 0..4u8 {
+        let x = rect.left() + i as f32 * (SEGMENT.x + GAP);
+        let segment = Rect::from_min_size(egui::pos2(x, rect.top()), SEGMENT);
+        let color = if i < level.bars() { fill } else { empty };
+        ui.painter()
+            .rect_filled(segment, CornerRadius::same(1), color);
+    }
+}
+
+fn level_name(level: Battery) -> &'static str {
+    match level {
+        Battery::Full => "full",
+        Battery::Medium => "medium",
+        Battery::Low => "low",
+        Battery::Empty => "empty",
+    }
 }
 
 fn close_button(ui: &mut egui::Ui, rect: Rect, p: &Palette) -> egui::Response {
