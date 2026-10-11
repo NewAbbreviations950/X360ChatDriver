@@ -10,7 +10,7 @@ mod keymap;
 mod layout;
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use nusb::transfer::{Buffer, In, Interrupt, Out, TransferError};
 use nusb::{DeviceInfo, Endpoint, MaybeFuture};
-use x360chatpad_proto::{ChatpadEvent, InPacket, out, parse};
+use x360chatpad_proto::{Battery, ChatpadEvent, InPacket, out, parse};
 
 use devices::{ChatpadState, Pad};
 use keyboard::Keyboard;
@@ -34,6 +34,8 @@ struct Shared {
     keymap: RwLock<Keymap>,
     /// Which controller slots have a controller connected.
     connected: [AtomicBool; SLOTS as usize],
+    /// Last battery level reported per slot, as bars (1–4); 0 = unknown.
+    battery: [AtomicU8; SLOTS as usize],
     /// Session bus connection, if available, for status and key signals.
     dbus: Option<zbus::blocking::Connection>,
     keyboard: Mutex<Keyboard>,
@@ -44,6 +46,13 @@ struct Shared {
 impl Shared {
     fn set_connected(&self, slot: u8, connected: bool) {
         self.connected[slot as usize].store(connected, Ordering::SeqCst);
+        if !connected {
+            self.battery[slot as usize].store(0, Ordering::SeqCst);
+        }
+    }
+
+    fn set_battery(&self, slot: u8, level: Battery) {
+        self.battery[slot as usize].store(level.bars(), Ordering::SeqCst);
     }
 
     fn key_pressed(&self, slot: u8, key: x360chatpad_proto::ChatpadKey) {
@@ -78,6 +87,7 @@ fn main() -> Result<()> {
         running: AtomicBool::new(true),
         keymap: RwLock::new(keymap),
         connected: Default::default(),
+        battery: Default::default(),
         dbus: dbus::serve(weak.clone()),
         keyboard: Mutex::new(keyboard),
         caps_lock: AtomicBool::new(false),
@@ -238,6 +248,7 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                                 pad.emit(&state)?;
                             }
                         }
+                        InPacket::Battery(level) => shared.set_battery(slot, level),
                         InPacket::Chatpad(ChatpadEvent::WakeRequest) => {
                             send(&mut ep_out, &out::chatpad_wake_ack())?
                         }

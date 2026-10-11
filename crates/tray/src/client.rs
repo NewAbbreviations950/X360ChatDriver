@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use x360chatpad_common::ChatpadKey;
 use x360chatpad_common::dbus::{BUS_NAME, INTERFACE, OBJECT_PATH};
+use x360chatpad_common::{Battery, ChatpadKey};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Status {
@@ -17,6 +17,8 @@ pub struct Status {
 pub struct DaemonStatus {
     pub layout: String,
     pub connected: Vec<bool>,
+    /// Per slot: the battery level, or None when unknown (or the slot is empty).
+    pub battery: Vec<Option<Battery>>,
 }
 
 pub struct Client {
@@ -36,10 +38,21 @@ impl Client {
     }
 
     pub fn status(&self) -> Status {
-        let running = self
-            .proxy()
-            .and_then(|p| p.call::<_, _, (String, Vec<bool>)>("Status", &()).ok())
-            .map(|(layout, connected)| DaemonStatus { layout, connected });
+        let running = self.proxy().and_then(|p| {
+            let (layout, connected) = p.call::<_, _, (String, Vec<bool>)>("Status", &()).ok()?;
+            // A daemon from before `Battery` existed has no such method: no bars then.
+            let battery = p
+                .call::<_, _, Vec<u8>>("Battery", &())
+                .unwrap_or_default()
+                .into_iter()
+                .map(Battery::from_bars)
+                .collect();
+            Some(DaemonStatus {
+                layout,
+                connected,
+                battery,
+            })
+        });
         Status { running }
     }
 

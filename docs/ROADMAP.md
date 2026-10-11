@@ -56,16 +56,17 @@ script, no Flatpak) is summarised under "Architecture decisions" at the end.
   uses it but may not list it in Settings → Controller. It does list it once it's hotplugged
   while Steam runs. Check this again, especially when booting into Deck game mode.
 - **Use for the People light:** it's currently always off.
-- **Battery status:** not identified in the protocol yet. Capture with `x360chatpad-dump`
-  while the battery drains, or compare different battery levels. Show it in the tray and
-  the popup header, and notify when low. Add it to the D-Bus `Status`.
+- **Battery in the tray:** the popup header shows 4-segment bars per connected player, and
+  the daemon's D-Bus `Battery` method and a low-battery notification are in place. Still to do:
+  show the level in the tray menu or tooltip. Open protocol questions (the `c0`/`3c` codes and
+  the 2.6–2.7 V full/medium boundary) are in `docs/protocol.md`.
 - **Automatic layout change detection:** right now it needs a manual Reload from the tray.
   The daemon could watch `kxkbrc`/gsettings instead.
 - **Headset audio:** the odd-numbered interfaces (protocol 0x82, interrupt endpoints) carry
   the headset. The format is undocumented. Research it, then expose a PipeWire sink and
   source.
-- **Unknown packets:** `00 f8 0N` (seen while the chatpad wasn't handshaked) and the
-  `00 0f` link-info packet.
+- **Unknown packets:** `00 f8 0N` (seen while the chatpad wasn't handshaked). The `00 0f`
+  link-info packet is only partly known: byte 17 is the battery, and the rest is unexplained.
 - **Non-ASCII chatpad legends** (€, š, ¨, «, »): these work only if the layout can type
   them. A compose/Unicode fallback could cover the rest.
 - **Packaging extras:** aarch64 builds, AUR/OBS packages, maybe a Flatpak for the GUI only.
