@@ -4,6 +4,7 @@
 mod actions;
 mod dbus;
 mod devices;
+mod ffb;
 mod indicators;
 mod keyboard;
 mod keymap;
@@ -20,7 +21,7 @@ use nusb::transfer::{Buffer, In, Interrupt, Out, TransferError};
 use nusb::{DeviceInfo, Endpoint, MaybeFuture};
 use x360chatpad_proto::{Battery, ChatpadEvent, InPacket, out, parse};
 
-use devices::{ChatpadState, Pad};
+use devices::{ChatpadState, Pad, Wheel};
 use keyboard::Keyboard;
 use keymap::Keymap;
 use layout::Layout;
@@ -28,6 +29,28 @@ use layout::Layout;
 const RECEIVER_IDS: &[(u16, u16)] = &[(0x045e, 0x0719), (0x045e, 0x0291), (0x045e, 0x02a9)];
 const SLOTS: u8 = 4;
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// What a connected controller looks like to games.
+enum Controller {
+    Pad(Pad),
+    Wheel(Wheel),
+}
+
+/// Slots whose controller should be exposed as a racing wheel, from the comma-separated
+/// `X360CHATPAD_WHEEL_SLOTS` (e.g. `0` or `0,2`). Until the link-info packet's device type
+/// is decoded, this is how a wheel is recognised.
+fn wheel_slots() -> [bool; SLOTS as usize] {
+    let mut slots = [false; SLOTS as usize];
+    for s in std::env::var("X360CHATPAD_WHEEL_SLOTS")
+        .unwrap_or_default()
+        .split(',')
+    {
+        if let Some(slot) = s.trim().parse::<usize>().ok().filter(|&s| s < slots.len()) {
+            slots[slot] = true;
+        }
+    }
+    slots
+}
 
 struct Shared {
     running: AtomicBool,
@@ -211,7 +234,10 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
     }
     send(&mut ep_out, &out::presence_inquiry())?;
 
-    let mut pad: Option<Pad> = None;
+    let is_wheel = wheel_slots()[slot as usize];
+    // Log games' force-feedback requests to a wheel (X360CHATPAD_FF_LOG=1).
+    let ff_log = std::env::var_os("X360CHATPAD_FF_LOG").is_some();
+    let mut controller: Option<Controller> = None;
     let mut chatpad = ChatpadState::default();
     let mut indicators = indicators::IndicatorSync::default();
     let mut keepalive_phase = false;
@@ -220,7 +246,7 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
     let result = (|| -> Result<()> {
         while shared.running.load(Ordering::SeqCst) {
             // Poll faster while a controller is connected so rumble requests go out promptly.
-            let timeout = if pad.is_some() {
+            let timeout = if controller.is_some() {
                 Duration::from_millis(8)
             } else {
                 Duration::from_millis(100)
@@ -228,26 +254,31 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
             if let Some(c) = ep_in.wait_next_complete(timeout) {
                 match c.status {
                     Ok(()) => match parse(&c.buffer[..c.actual_len]) {
-                        InPacket::Presence { connected: true } if pad.is_none() => {
+                        InPacket::Presence { connected: true } if controller.is_none() => {
                             eprintln!("slot {slot}: controller connected");
-                            pad = Some(Pad::new().context("create virtual pad")?);
+                            controller = Some(if is_wheel {
+                                eprintln!("slot {slot}: exposing it as a racing wheel");
+                                Controller::Wheel(Wheel::new().context("create virtual wheel")?)
+                            } else {
+                                Controller::Pad(Pad::new().context("create virtual pad")?)
+                            });
                             send(&mut ep_out, &out::led(2 + slot))?;
                             indicators.reset();
                             next_keepalive = Instant::now();
                             shared.set_connected(slot, true);
                         }
-                        InPacket::Presence { connected: false } if pad.is_some() => {
+                        InPacket::Presence { connected: false } if controller.is_some() => {
                             eprintln!("slot {slot}: controller disconnected");
-                            pad = None;
+                            controller = None;
                             shared.set_connected(slot, false);
                             let out = chatpad.release_all(&shared.keymap.read().unwrap());
                             shared.type_keys(&out.keys)?;
                         }
-                        InPacket::Gamepad(state) => {
-                            if let Some(pad) = pad.as_mut() {
-                                pad.emit(&state)?;
-                            }
-                        }
+                        InPacket::Gamepad(state) => match controller.as_mut() {
+                            Some(Controller::Pad(pad)) => pad.emit(&state)?,
+                            Some(Controller::Wheel(wheel)) => wheel.emit(&state)?,
+                            None => {}
+                        },
                         InPacket::Battery(level) => shared.set_battery(slot, level),
                         InPacket::Chatpad(ChatpadEvent::WakeRequest) => {
                             send(&mut ep_out, &out::chatpad_wake_ack())?
@@ -268,7 +299,9 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                                 // Show it right away; the compositor's LED update confirms it.
                                 shared.caps_lock.fetch_xor(true, Ordering::SeqCst);
                             }
-                            if let (Some(on), Some(pad)) = (out.quick_menu, pad.as_mut()) {
+                            if let (Some(on), Some(Controller::Pad(pad))) =
+                                (out.quick_menu, controller.as_mut())
+                            {
                                 pad.quick_menu(on, Instant::now())?;
                             }
                         }
@@ -285,11 +318,25 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
                 ep_in.submit(buf);
             }
 
-            if let Some(pad) = pad.as_mut() {
-                pad.tick(Instant::now())?;
-                if let Some((strong, weak)) = pad.poll_ff()? {
-                    send(&mut ep_out, &out::rumble(strong, weak))?;
+            match controller.as_mut() {
+                Some(Controller::Pad(pad)) => {
+                    pad.tick(Instant::now())?;
+                    if let Some((strong, weak)) = pad.poll_ff()? {
+                        send(&mut ep_out, &out::rumble(strong, weak))?;
+                    }
                 }
+                Some(Controller::Wheel(wheel)) => {
+                    // Not sent to the wheel yet: its force-feedback packets are still unknown.
+                    for op in wheel.poll_ff()? {
+                        if ff_log {
+                            eprintln!("slot {slot}: ff {op:?}");
+                        }
+                    }
+                }
+                None => {}
+            }
+            // Chatpad upkeep; a wheel has no chatpad port.
+            if matches!(controller, Some(Controller::Pad(_))) {
                 for (bit, on) in indicators.poll(
                     chatpad.indicators(shared.caps_lock.load(Ordering::SeqCst)),
                     Instant::now(),
@@ -307,7 +354,7 @@ fn run_slot(slot: u8, iface: &nusb::Interface, shared: &Shared) -> Result<()> {
     })();
 
     let _ = shared.type_keys(&chatpad.release_all(&shared.keymap.read().unwrap()).keys);
-    if pad.is_some() {
+    if controller.is_some() {
         shared.set_connected(slot, false);
         let _ = send(&mut ep_out, &out::rumble(0, 0));
     }

@@ -72,6 +72,15 @@ script, no Flatpak) is summarised under "Architecture decisions" at the end.
   them. A compose/Unicode fallback could cover the rest.
 - **Packaging extras:** aarch64 builds, AUR/OBS packages, maybe a Flatpak for the GUI only.
 - **Power off controller** from the tray or popup (`00 00 08 c0`); needs a D-Bus method.
+- **Racing wheel force feedback** (Xbox 360 Wireless Racing Wheel, WRW01). Games' effects
+  are passed to the wheel through the receiver.
+  - Done: a `p` probe command in `x360chatpad-dump` with sweep scripts (`docs/probes/`).
+    The daemon can expose a slot as a joystick-style virtual wheel
+    (`X360CHATPAD_WHEEL_SLOTS`) that accepts every evdev effect type and logs it
+    (`X360CHATPAD_FF_LOG`). Effects are normalised in `crates/daemon/src/ffb.rs`.
+  - Next: identify the wheel from link info, find its force-feedback packets with the probes,
+    then write the encoder (`ffb::Op` → packets) and trim the advertised effect types to
+    what the wheel plays. If the probes find nothing, rethink before building more.
 
 ## Architecture decisions (from the initial plan)
 - Rust. The daemon runs as a systemd **user** service, so it works in Steam Deck game

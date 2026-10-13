@@ -90,6 +90,19 @@ Observed codes, from resets at each voltage (sweep 2, 3.0 V down to 2.1 V):
 - Not yet explained: `c0` and `3c` (low bits don't match the table), and the exact full/medium boundary between 2.6 and 2.7 V.
 - SDL's HIDAPI Xbox 360 wireless driver reads these same bytes (link byte 17, status byte 4) and sends no battery request. It maps the value to four buckets, but its 0–255 thresholds don't match the codes we see. [SDL source](https://github.com/libsdl-org/SDL/blob/a8780c6a287bb97549ec4411cff7ade560db441f/src/joystick/hidapi/SDL_hidapi_xbox360w.c)
 
+### Racing wheel (Xbox 360 Wireless Racing Wheel, WRW01)
+Not captured yet. Microsoft's patent US 8,117,364 names this wheel and describes its
+force-feedback protocol in general terms:
+- The host uploads effect blocks and parameter blocks into the wheel's memory, then sends
+  short start/stop, gain and device-control commands. The wheel plays effects by itself.
+- Effect types: constant, ramp, five periodic waves, spring, damper, inertia, friction.
+- An effect block is 8 one-byte fields: report type, index, block control, effect type,
+  duration, gain, start delay, loop count. A toggle bit (report-type MSB) flips on every
+  message.
+- Short commands fit in 6–12 header bits; the rest use an 8-byte payload.
+
+The byte values aren't given. `docs/probes/` has the scripts used to look for them.
+
 ### Unknown
 - `00 f8 0N 00…` (N = 1–3): seen only while the chatpad was not handshaked and keys were being pressed. Possibly "key pressed while asleep" or an attachment status.
 - `00 f8 01` / `00 f8 02` alternate every few seconds while connected; meaning unknown.

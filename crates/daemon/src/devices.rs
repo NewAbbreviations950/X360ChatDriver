@@ -13,6 +13,7 @@ use evdev::{
 };
 use x360chatpad_proto::{ChatpadKey, ChatpadKeys, GamepadState, button, led, modifier};
 
+use crate::ffb;
 use crate::keymap::{Keymap, Layer};
 
 /// Identify as a wired Xbox 360 pad (what xpad reports for 045e:028e), which SDL and Steam
@@ -225,6 +226,174 @@ impl Pad {
     }
 }
 
+/// A racing wheel is a plain joystick rather than an Xbox pad, so Steam Input leaves it
+/// alone and games get its force feedback. The ID is pid.codes' test PID, which no gamepad
+/// mapping database knows.
+const WHEEL_ID: (u16, u16, u16) = (0x1209, 0x0001, 0x0001);
+const WHEEL_NAME: &str = "Microsoft Xbox 360 Wireless Racing Wheel";
+
+/// Joystick buttons rather than gamepad ones (`BTN_SOUTH`…), so SDL doesn't guess a gamepad
+/// mapping for the wheel either.
+const WHEEL_BUTTONS: &[(u16, KeyCode)] = &[
+    (button::A, KeyCode::BTN_TRIGGER),
+    (button::B, KeyCode::BTN_THUMB),
+    (button::X, KeyCode::BTN_THUMB2),
+    (button::Y, KeyCode::BTN_TOP),
+    (button::LB, KeyCode::BTN_TOP2),
+    (button::RB, KeyCode::BTN_PINKIE),
+    (button::BACK, KeyCode::BTN_BASE),
+    (button::START, KeyCode::BTN_BASE2),
+    (button::GUIDE, KeyCode::BTN_BASE3),
+    (button::LS, KeyCode::BTN_BASE4),
+    (button::RS, KeyCode::BTN_BASE5),
+];
+
+/// Every effect type a wheel could play. Until the wheel's protocol is known, all of them
+/// are advertised so the log shows what games ask for; trim to what the wheel plays later.
+const WHEEL_FF: &[FFEffectCode] = &[
+    FFEffectCode::FF_CONSTANT,
+    FFEffectCode::FF_RAMP,
+    FFEffectCode::FF_PERIODIC,
+    FFEffectCode::FF_SQUARE,
+    FFEffectCode::FF_TRIANGLE,
+    FFEffectCode::FF_SINE,
+    FFEffectCode::FF_SAW_UP,
+    FFEffectCode::FF_SAW_DOWN,
+    FFEffectCode::FF_SPRING,
+    FFEffectCode::FF_FRICTION,
+    FFEffectCode::FF_DAMPER,
+    FFEffectCode::FF_INERTIA,
+    FFEffectCode::FF_RUMBLE,
+    FFEffectCode::FF_GAIN,
+    FFEffectCode::FF_AUTOCENTER,
+];
+
+pub struct Wheel {
+    dev: VirtualDevice,
+    effects: HashMap<i16, ffb::Effect>,
+}
+
+impl Wheel {
+    pub fn new() -> io::Result<Self> {
+        let keys: AttributeSet<KeyCode> = WHEEL_BUTTONS.iter().map(|&(_, k)| k).collect();
+        let stick = AbsInfo::new(0, -32768, 32767, 0, 0, 0);
+        let pedal = AbsInfo::new(0, 0, 255, 0, 0, 0);
+        let hat = AbsInfo::new(0, -1, 1, 0, 0, 0);
+        let mut builder = VirtualDevice::builder()?
+            .name(WHEEL_NAME)
+            .input_id(InputId::new(
+                BusType::BUS_USB,
+                WHEEL_ID.0,
+                WHEEL_ID.1,
+                WHEEL_ID.2,
+            ))
+            .with_keys(&keys)?
+            .with_ff(&WHEEL_FF.iter().copied().collect::<AttributeSet<_>>())?
+            .with_ff_effects_max(FF_EFFECTS_MAX as u32);
+        for (axis, info) in [
+            (AbsoluteAxisCode::ABS_X, stick),
+            (AbsoluteAxisCode::ABS_Y, stick),
+            (AbsoluteAxisCode::ABS_RX, stick),
+            (AbsoluteAxisCode::ABS_RY, stick),
+            (AbsoluteAxisCode::ABS_Z, pedal),
+            (AbsoluteAxisCode::ABS_RZ, pedal),
+            (AbsoluteAxisCode::ABS_HAT0X, hat),
+            (AbsoluteAxisCode::ABS_HAT0Y, hat),
+        ] {
+            builder = builder.with_absolute_axis(&UinputAbsSetup::new(axis, info))?;
+        }
+        let dev = builder.build()?;
+        set_nonblocking(&dev)?;
+        Ok(Wheel {
+            dev,
+            effects: HashMap::new(),
+        })
+    }
+
+    /// XInput reports a wheel like a pad: steering on LX, throttle on RT, brake on LT. Those
+    /// become X, Z and RZ. The other stick values go to Y, RX and RY until a capture shows
+    /// whether the wheel uses them.
+    pub fn emit(&mut self, s: &GamepadState) -> io::Result<()> {
+        let mut events: Vec<InputEvent> = WHEEL_BUTTONS
+            .iter()
+            .map(|&(bit, key)| {
+                InputEvent::new(EventType::KEY.0, key.0, (s.buttons & bit != 0) as i32)
+            })
+            .collect();
+        let dir =
+            |neg: u16, pos: u16| (s.buttons & pos != 0) as i32 - (s.buttons & neg != 0) as i32;
+        for (axis, value) in [
+            (AbsoluteAxisCode::ABS_X, s.lx as i32),
+            (AbsoluteAxisCode::ABS_Y, !s.ly as i32),
+            (AbsoluteAxisCode::ABS_RX, s.rx as i32),
+            (AbsoluteAxisCode::ABS_RY, !s.ry as i32),
+            (AbsoluteAxisCode::ABS_Z, s.rt as i32),
+            (AbsoluteAxisCode::ABS_RZ, s.lt as i32),
+            (
+                AbsoluteAxisCode::ABS_HAT0X,
+                dir(button::DPAD_LEFT, button::DPAD_RIGHT),
+            ),
+            (
+                AbsoluteAxisCode::ABS_HAT0Y,
+                dir(button::DPAD_UP, button::DPAD_DOWN),
+            ),
+        ] {
+            events.push(InputEvent::new(EventType::ABSOLUTE.0, axis.0, value));
+        }
+        self.dev.emit(&events)
+    }
+
+    /// Answer pending force-feedback requests from games and return them, in order.
+    pub fn poll_ff(&mut self) -> io::Result<Vec<ffb::Op>> {
+        let events: Vec<InputEvent> = match self.dev.fetch_events() {
+            Ok(events) => events.collect(),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Vec::new(),
+            Err(e) => return Err(e),
+        };
+        let mut ops = Vec::new();
+        for event in events {
+            match event.destructure() {
+                EventSummary::UInput(_, UInputCode::UI_FF_UPLOAD, request) => {
+                    let upload = ffb::Upload::begin(self.dev.as_raw_fd(), request)?;
+                    // The input core has already picked a free id.
+                    let id = upload.id();
+                    match ffb::from_raw(upload.raw()) {
+                        Some(effect) if (0..FF_EFFECTS_MAX as i16).contains(&id) => {
+                            upload.finish(Ok(id))?;
+                            self.effects.insert(id, effect);
+                            ops.push(ffb::Op::Upload { id, effect });
+                        }
+                        _ => upload.finish(Err(libc::EINVAL))?,
+                    }
+                }
+                EventSummary::UInput(event, UInputCode::UI_FF_ERASE, ..) => {
+                    let mut erase = self.dev.process_ff_erase(event)?;
+                    let id = erase.effect_id() as i16;
+                    self.effects.remove(&id);
+                    erase.set_retval(0);
+                    ops.push(ffb::Op::Erase { id });
+                }
+                EventSummary::ForceFeedback(_, FFEffectCode::FF_GAIN, value) => {
+                    ops.push(ffb::Op::Gain(value as f32 / 65535.0))
+                }
+                EventSummary::ForceFeedback(_, FFEffectCode::FF_AUTOCENTER, value) => {
+                    ops.push(ffb::Op::Autocenter(value as f32 / 65535.0))
+                }
+                EventSummary::ForceFeedback(_, code, value) => {
+                    let id = code.0 as i16;
+                    ops.push(if value > 0 {
+                        ffb::Op::Play { id, count: value }
+                    } else {
+                        ffb::Op::Stop { id }
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(ops)
+    }
+}
+
 /// Shift, Green and Orange are one-shot like on the console: tap one, then the key. Holding
 /// the modifier while pressing the key works too.
 const STICKY: [u8; 3] = [modifier::SHIFT, modifier::GREEN, modifier::ORANGE];
@@ -405,6 +574,80 @@ mod tests {
     use super::*;
     use crate::layout::Layout;
     use KeyCode as K;
+
+    /// Plays the game's side against a real uinput wheel: upload, play, stop and erase a
+    /// constant force through the event node, and check what `poll_ff` reports.
+    #[test]
+    #[ignore = "needs /dev/uinput and access to the new event node"]
+    fn wheel_reports_uploaded_effects() {
+        use evdev::{FFEffectData, FFEnvelope, FFReplay, FFTrigger};
+
+        let mut wheel = Wheel::new().unwrap();
+        let node = wheel
+            .dev
+            .enumerate_dev_nodes_blocking()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let game = std::thread::spawn(move || {
+            // udev needs a moment to apply the joystick ACL.
+            std::thread::sleep(Duration::from_millis(300));
+            let mut device = evdev::Device::open(&node).unwrap();
+            let mut effect = device
+                .upload_ff_effect(FFEffectData {
+                    direction: 0xc000,
+                    trigger: FFTrigger {
+                        button: 0,
+                        interval: 0,
+                    },
+                    replay: FFReplay {
+                        length: 250,
+                        delay: 0,
+                    },
+                    kind: FFEffectKind::Constant {
+                        level: 0x4000,
+                        envelope: FFEnvelope {
+                            attack_length: 0,
+                            attack_level: 0,
+                            fade_length: 0,
+                            fade_level: 0,
+                        },
+                    },
+                })
+                .unwrap();
+            effect.play(1).unwrap();
+            effect.stop().unwrap();
+            // Dropping the effect erases it.
+        });
+        let mut ops = Vec::new();
+        let until = Instant::now() + Duration::from_secs(3);
+        while !game.is_finished() && Instant::now() < until {
+            ops.extend(wheel.poll_ff().unwrap());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        game.join().unwrap();
+        ops.extend(wheel.poll_ff().unwrap());
+
+        let [ffb::Op::Upload { id, effect }, rest @ ..] = ops.as_slice() else {
+            panic!("{ops:?}")
+        };
+        let ffb::Kind::Constant { force, .. } = effect.kind else {
+            panic!("{effect:?}")
+        };
+        assert!((force + 0.5).abs() < 1e-3, "{force}");
+        assert_eq!(effect.duration, Some(Duration::from_millis(250)));
+        assert_eq!(
+            rest,
+            [
+                ffb::Op::Play { id: *id, count: 1 },
+                ffb::Op::Stop { id: *id },
+                // The input core stops an effect again before erasing it.
+                ffb::Op::Stop { id: *id },
+                ffb::Op::Erase { id: *id }
+            ]
+        );
+    }
 
     fn report(modifiers: u8, keys: &[u8]) -> ChatpadKeys {
         let mut r = ChatpadKeys {
