@@ -242,7 +242,7 @@ impl Settings {
                         if several {
                             ui.label(egui::RichText::new(format!("P{}", slot + 1)).weak());
                         }
-                        let tip = format!("Player {}: battery {}", slot + 1, level_name(*level));
+                        let tip = format!("Player {}: battery {}", slot + 1, level.name());
                         battery_bars(ui, &p, *level, &tip);
                     }
                 }
@@ -649,15 +649,6 @@ fn battery_bars(ui: &mut egui::Ui, p: &Palette, level: Battery, tip: &str) {
         let color = if i < level.bars() { fill } else { empty };
         ui.painter()
             .rect_filled(segment, CornerRadius::same(1), color);
-    }
-}
-
-fn level_name(level: Battery) -> &'static str {
-    match level {
-        Battery::Full => "full",
-        Battery::Medium => "medium",
-        Battery::Low => "low",
-        Battery::Empty => "empty",
     }
 }
 

@@ -62,6 +62,16 @@ impl Battery {
     pub fn is_low(self) -> bool {
         matches!(self, Battery::Empty | Battery::Low)
     }
+
+    /// Lower-case name for UI text ("full", "medium", "low", "empty").
+    pub fn name(self) -> &'static str {
+        match self {
+            Battery::Full => "full",
+            Battery::Medium => "medium",
+            Battery::Low => "low",
+            Battery::Empty => "empty",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

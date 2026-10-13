@@ -28,6 +28,23 @@ impl Tray {
             },
         }
     }
+
+    /// The summary, then a line per connected player with its battery level when known.
+    fn tool_tip_text(&self) -> String {
+        let mut lines = vec![self.summary()];
+        if let Some(s) = &self.status.running {
+            for (slot, connected) in s.connected.iter().enumerate() {
+                if !*connected {
+                    continue;
+                }
+                lines.push(match s.battery.get(slot).copied().flatten() {
+                    Some(level) => format!("Player {}: battery {}", slot + 1, level.name()),
+                    None => format!("Player {}", slot + 1),
+                });
+            }
+        }
+        lines.join("\n")
+    }
 }
 
 impl ksni::Tray for Tray {
@@ -59,7 +76,7 @@ impl ksni::Tray for Tray {
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
             title: "X360 Chatpad".into(),
-            description: self.summary(),
+            description: self.tool_tip_text(),
             ..Default::default()
         }
     }
@@ -269,6 +286,40 @@ mod tests {
         // Recovering re-arms the slot, so a later drop notifies again.
         assert!(newly_low(&mut notified, &connected, &full).is_empty());
         assert_eq!(newly_low(&mut notified, &connected, &low), vec![0]);
+    }
+
+    fn tray(connected: [bool; 4], battery: [Option<Battery>; 4]) -> Tray {
+        Tray {
+            status: Status {
+                running: Some(crate::client::DaemonStatus {
+                    layout: "no".into(),
+                    connected: connected.into(),
+                    battery: battery.into(),
+                }),
+            },
+            icons: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn tool_tip_lists_battery_per_connected_player() {
+        let t = tray(
+            [true, false, true, false],
+            [Some(Battery::Full), Some(Battery::Low), None, None],
+        );
+        // Slot 2's stale level is skipped; slot 3 has no level yet.
+        assert_eq!(
+            t.tool_tip_text(),
+            "2 controllers connected\nPlayer 1: battery full\nPlayer 3"
+        );
+    }
+
+    #[test]
+    fn tool_tip_without_driver_or_controllers() {
+        let mut t = tray([false; 4], [None; 4]);
+        assert_eq!(t.tool_tip_text(), "No controllers connected");
+        t.status.running = None;
+        assert_eq!(t.tool_tip_text(), "Driver not running");
     }
 
     #[test]

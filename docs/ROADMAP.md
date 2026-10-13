@@ -56,10 +56,11 @@ script, no Flatpak) is summarised under "Architecture decisions" at the end.
   uses it but may not list it in Settings → Controller. It does list it once it's hotplugged
   while Steam runs. Check this again, especially when booting into Deck game mode.
 - **Use for the People light:** it's currently always off.
-- **Battery in the tray:** the popup header shows 4-segment bars per connected player, and
-  the daemon's D-Bus `Battery` method and a low-battery notification are in place. Still to do:
-  show the level in the tray menu or tooltip. Open protocol questions (the `c0`/`3c` codes and
-  the 2.6–2.7 V full/medium boundary) are in `docs/protocol.md`.
+- **Battery in the tray:** the popup header shows 4-segment bars per connected player, the
+  tray tooltip lists each player's level, and the daemon's D-Bus `Battery` method and a
+  low-battery notification are in place. Still to do: maybe show it in the tray menu's player
+  lines too. Open protocol questions (the `c0`/`3c` codes and the 2.6–2.7 V full/medium
+  boundary) are in `docs/protocol.md`.
 - **Automatic layout change detection:** right now it needs a manual Reload from the tray.
   The daemon could watch `kxkbrc`/gsettings instead.
 - **Headset audio:** the odd-numbered interfaces (protocol 0x82, interrupt endpoints) carry
